@@ -1,14 +1,23 @@
 # typed: true
 # frozen_string_literal: true
 
-# TODO
-# - Add filename validator for forbidden characters depending on OS
-#   For example Windows: https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
-
 require 'uri'
 require 'net/http'
 
-# This module allows to make http requests and download files.
+# Formats strings
+module StringFormat
+  def remove_os_restricted(string)
+    string.gsub(%r{[<>"/\\|?*#@&:]}, '')
+  end
+
+  def replace_multi(string, pattern)
+    string.gsub(Regexp.union(pattern.keys), pattern)
+  end
+
+  module_function :remove_os_restricted, :replace_multi
+end
+
+# Allows to make http requests and download files.
 module Requests
   def fetch(url)
     uri = URI(url)
@@ -35,7 +44,7 @@ module Requests
   module_function :fetch, :download
 end
 
-# This class parses html and downloads your album.
+# Downloads your album.
 class MDownloader
   attr_reader :album_name, :songs_data
 
@@ -44,6 +53,7 @@ class MDownloader
     raise StandardError, 'URL is not valid' if ARGV.first[%r{https://myzuka.club/Album/\d+/[A-Za-z0-9-]+}].nil?
 
     parse_data
+    format_data
   rescue StandardError => e
     puts "Script failed with 'StandardError': #{e.message}"
 
@@ -62,20 +72,27 @@ class MDownloader
 
   private
 
+  def format_data
+    @album_name = StringFormat.remove_os_restricted(@album_name)
+    @songs_data = @songs_data.map do |item|
+      {
+        'song_name' => StringFormat.remove_os_restricted(StringFormat.replace_multi(item['song_name'], { '&#39;' => '\'' })),
+        'song_url' => StringFormat.replace_multi(item['song_url'], { 'Play' => 'Download', 'amp;' => '' })
+      }
+    end
+  end
+
   def parse_data
     html = Requests.fetch(ARGV.first)
 
-    song_name_replacements = { '&#39;' => '\'' }
-    song_url_replacements = { 'Play' => 'Download', 'amp;' => '' }
-
     @album_name = html[%r{<h1>(.*?)</h1>}, 1]
     @songs_data = html.scan(/<span class="ico ".+?>/).inject([]) do |result, item|
-      song_name = item[/data-title="([^"]+)"/, 1].gsub(Regexp.union(song_name_replacements.keys), song_name_replacements)
-      song_url = item[/data-url="([^"]+)"/, 1].gsub(Regexp.union(song_url_replacements.keys), song_url_replacements)
+      song_name = item[/data-title="([^"]+)"/, 1]
+      song_url = item[/data-url="([^"]+)"/, 1]
 
       result << { 'song_name' => song_name, 'song_url' => song_url }
     end
   end
 end
 
-MDownloader.new.download
+MDownloader.new.download if __FILE__ == $PROGRAM_NAME
